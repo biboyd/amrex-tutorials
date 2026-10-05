@@ -185,25 +185,90 @@ void main_main ()
     }
 }
 
+__global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
+    Real* AMREX_RESTRICT phi_new,
+    const int* lo, const int* hi,
+    const Real dt)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x + lo[0];
+    int j = blockIdx.y * blockDim.y + threadIdx.y + lo[1];
+#if (AMREX_SPACEDIM == 3)
+    int k = blockIdx.z * blockDim.z + threadIdx.z + lo[2];
+#else
+    int k=0;
+#endif
+
+    if (i <= hi[0] && 
+        j <= hi[1] && 
+#if (AMREX_SPACEDIM == 3)
+        k <= hi[2]
+#endif
+    ) {
+        int nx = hi[0] - lo[0] + 1;
+        int ny = hi[1] - lo[1] + 1;
+#if (AMREX_SPACEDIM == 3)
+        int nz = hi[2] - lo[2] + 1;
+#endif
+        int ncells = nx * ny;
+#if (AMREX_SPACEDIM == 3)
+        ncells = ncells*nz;
+#endif
+        
+        // Helper function to get linear index
+        auto get_idx = [=] __device__ (int ii, int jj, int kk) -> int {
+#if (AMREX_SPACEDIM == 3)
+            return (kk - lo[2]) * nx * ny + (jj - lo[1]) * nx + (ii - lo[0]);
+#else
+            return (jj - lo[1]) * nx + (ii - lo[0]);
+#endif
+        };
+        
+        int idx = get_idx(i, j, k);
+        
+        // Load phi from OLD array
+        Real phi_0 = phi_old[idx];
+        Real phi_1 = phi_old[get_idx(i+1, j, k)];
+        Real phi_2 = phi_old[get_idx(i-1, j, k)];
+        Real phi_3 = phi_old[get_idx(i, j+1, k)];
+        Real phi_4 = phi_old[get_idx(i, j-1, k)];
+#if (AMREX_SPACEDIM == 3)
+        Real phi_5 = phi_old[get_idx(i, j+1, k)];
+        Real phi_6 = phi_old[get_idx(i, j-1, k)];
+#endif
+
+        phi_new[idx] = phi_0 + dt *
+                    ( (phi_1 - 2.*phi_0 + phi_2) / (dx[0]*dx[0])
+                     +(phi_3 - 2.*phi_0 + phi_4) / (dx[1]*dx[1])
+#if (AMREX_SPACEDIM == 3)
+                     +(phi_5 - 2.*phi_0 + phi_6) / (dx[2]*dx[2])
+#endif
+                    ); 
+    }
+}
+
 void gpu_relaxation(){
        for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
         {
             const Box& bx = mfi.validbox();
 
-            const Array4<Real>& phiOld = phi_old.array(mfi);
-            const Array4<Real>& phiNew = phi_new.array(mfi);
+            const Array4<Real>& phiOld = phi_old[mfi].dataPtr();
+            const Array4<Real>& phiNew = phi_new[mfi].dataPtr();
 
-            // advance the data by dt
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
-            {
-                phiNew(i,j,k) = phiOld(i,j,k) + dt *
-                    ( (phiOld(i+1,j,k) - 2.*phiOld(i,j,k) + phiOld(i-1,j,k)) / (dx[0]*dx[0])
-                     +(phiOld(i,j+1,k) - 2.*phiOld(i,j,k) + phiOld(i,j-1,k)) / (dx[1]*dx[1])
-#if (AMREX_SPACEDIM == 3)
-                     +(phiOld(i,j,k+1) - 2.*phiOld(i,j,k) + phiOld(i,j,k-1)) / (dx[2]*dx[2])
-#endif
-                        );
-            });
+            const int* lo = box.loVect();
+            const int* hi = box.hiVect();
+            
+            int nx = hi[0] - lo[0] + 1;
+            int ny = hi[1] - lo[1] + 1;
+            int nz = hi[2] - lo[2] + 1;
+            
+            dim3 blockSize(8, 8, 8);
+            dim3 gridSize((nx + 7) / 8, (ny + 7) / 8, (nz + 7) / 8);
+
+            // launch gpu kernel
+            optimized_kernel<<<gridSize, blockSize>>>(
+                phiOld, phiNew, lo, hi, dt 
+            );
+        
         }
 }
 
