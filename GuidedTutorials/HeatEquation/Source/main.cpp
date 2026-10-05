@@ -5,6 +5,9 @@
 
 using namespace amrex;
 
+void gpu_relaxation();
+void cpu_relaxation();
+
 int main (int argc, char* argv[])
 {
     amrex::Initialize(argc,argv);
@@ -155,7 +158,35 @@ void main_main ()
 
         // new_phi = old_phi + dt * Laplacian(old_phi)
         // loop over boxes
-        for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
+ 
+#ifdef AMREX_USE_GPU
+
+        gpu_relaxation();
+
+#else
+        cpu_relaxation();
+#endif
+
+        // update time
+        time = time + dt;
+
+        // copy new solution into old solution
+        MultiFab::Copy(phi_old, phi_new, 0, 0, 1, 0);
+
+        // Tell the I/O Processor to write out which step we're doing
+        amrex::Print() << "Advanced step " << step << "\n";
+
+        // Write a plotfile of the current data (plot_int was defined in the inputs file)
+        if (plot_int > 0 && step%plot_int == 0)
+        {
+            const std::string& pltfile = amrex::Concatenate("plt",step,5);
+            WriteSingleLevelPlotfile(pltfile, phi_new, {"phi"}, geom, time, step);
+        }
+    }
+}
+
+void gpu_relaxation(){
+       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
         {
             const Box& bx = mfi.validbox();
 
@@ -174,21 +205,26 @@ void main_main ()
                         );
             });
         }
+}
 
-        // update time
-        time = time + dt;
-
-        // copy new solution into old solution
-        MultiFab::Copy(phi_old, phi_new, 0, 0, 1, 0);
-
-        // Tell the I/O Processor to write out which step we're doing
-        amrex::Print() << "Advanced step " << step << "\n";
-
-        // Write a plotfile of the current data (plot_int was defined in the inputs file)
-        if (plot_int > 0 && step%plot_int == 0)
+void cpu_relaxation(){
+       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
         {
-            const std::string& pltfile = amrex::Concatenate("plt",step,5);
-            WriteSingleLevelPlotfile(pltfile, phi_new, {"phi"}, geom, time, step);
+            const Box& bx = mfi.validbox();
+
+            const Array4<Real>& phiOld = phi_old.array(mfi);
+            const Array4<Real>& phiNew = phi_new.array(mfi);
+
+            // advance the data by dt
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
+            {
+                phiNew(i,j,k) = phiOld(i,j,k) + dt *
+                    ( (phiOld(i+1,j,k) - 2.*phiOld(i,j,k) + phiOld(i-1,j,k)) / (dx[0]*dx[0])
+                     +(phiOld(i,j+1,k) - 2.*phiOld(i,j,k) + phiOld(i,j-1,k)) / (dx[1]*dx[1])
+#if (AMREX_SPACEDIM == 3)
+                     +(phiOld(i,j,k+1) - 2.*phiOld(i,j,k) + phiOld(i,j,k-1)) / (dx[2]*dx[2])
+#endif
+                        );
+            });
         }
-    }
 }
