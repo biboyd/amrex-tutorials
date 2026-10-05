@@ -276,8 +276,8 @@ __global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
         Real phi_3 = phi_old[get_idx(i, j+1, k)];
         Real phi_4 = phi_old[get_idx(i, j-1, k)];
 #if (AMREX_SPACEDIM == 3)
-        Real phi_5 = phi_old[get_idx(i, j+1, k)];
-        Real phi_6 = phi_old[get_idx(i, j-1, k)];
+        Real phi_5 = phi_old[get_idx(i, j, k+1)];
+        Real phi_6 = phi_old[get_idx(i, j, k-1)];
 #endif
 
         phi_new[idx] = phi_0 + dt *
