@@ -170,8 +170,8 @@ void main_main ()
             const Real* phiOld = phi_old[mfi].dataPtr();
             Real* phiNew = phi_new[mfi].dataPtr();
 
-            const int* lo = box.loVect();
-            const int* hi = box.hiVect();
+            const int lo = box.loVect();
+            const int hi = box.hiVect();
             
             int nx = hi[0] - lo[0] + 1;
             int ny = hi[1] - lo[1] + 1;
@@ -230,7 +230,7 @@ void main_main ()
 #ifdef AMREX_USE_GPU
 __global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
     Real* AMREX_RESTRICT phi_new,
-    const int* lo, const int* hi,
+    const int lo, const int hi,
     const GpuArray<Real,AMREX_SPACEDIM> dx,
     const Real dt)
 {
