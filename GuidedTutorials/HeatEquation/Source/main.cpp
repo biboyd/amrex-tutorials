@@ -246,6 +246,7 @@ __global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
     }
 }
 
+#ifdef AMREX_USE_GPU
 void gpu_relaxation(){
        for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
         {
@@ -272,6 +273,7 @@ void gpu_relaxation(){
         }
 }
 
+#else
 void cpu_relaxation(){
        for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
         {
@@ -293,3 +295,4 @@ void cpu_relaxation(){
             });
         }
 }
+#endif
