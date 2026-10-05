@@ -5,8 +5,10 @@
 
 using namespace amrex;
 
-void gpu_relaxation();
-void cpu_relaxation();
+#ifdef AMREX_USE_GPU
+__global__ void optimized_kernel(const Real* AMREX_RESTRICT, Real* AMREX_RESTRICT,
+    const int*, const int*, const GpuArray<Real,AMREX_SPACEDIM>, const Real);
+#endif
 
 int main (int argc, char* argv[])
 {
@@ -161,10 +163,50 @@ void main_main ()
  
 #ifdef AMREX_USE_GPU
 
-        gpu_relaxation();
+       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
+        {
+            const Box& box = mfi.validbox();
 
+            const Real* phiOld = phi_old[mfi].dataPtr();
+            Real* phiNew = phi_new[mfi].dataPtr();
+
+            const int* lo = box.loVect();
+            const int* hi = box.hiVect();
+            
+            int nx = hi[0] - lo[0] + 1;
+            int ny = hi[1] - lo[1] + 1;
+            int nz = hi[2] - lo[2] + 1;
+            
+            dim3 blockSize(8, 8, 8);
+            dim3 gridSize((nx + 7) / 8, (ny + 7) / 8, (nz + 7) / 8);
+
+            amrex::Print() << "b4 kernel\n";
+            // launch gpu kernel
+            optimized_kernel<<<gridSize, blockSize>>>(
+                phiOld, phiNew, lo, hi, dx, dt 
+            );
+        
+        }
 #else
-        cpu_relaxation();
+       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
+        {
+            const Box& bx = mfi.validbox();
+
+            const Array4<Real>& phiOld = phi_old.array(mfi);
+            const Array4<Real>& phiNew = phi_new.array(mfi);
+
+            // advance the data by dt
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
+            {
+                phiNew(i,j,k) = phiOld(i,j,k) + dt *
+                    ( (phiOld(i+1,j,k) - 2.*phiOld(i,j,k) + phiOld(i-1,j,k)) / (dx[0]*dx[0])
+                     +(phiOld(i,j+1,k) - 2.*phiOld(i,j,k) + phiOld(i,j-1,k)) / (dx[1]*dx[1])
+#if (AMREX_SPACEDIM == 3)
+                     +(phiOld(i,j,k+1) - 2.*phiOld(i,j,k) + phiOld(i,j,k-1)) / (dx[2]*dx[2])
+#endif
+                        );
+            });
+        }
 #endif
 
         // update time
@@ -185,9 +227,11 @@ void main_main ()
     }
 }
 
+#ifdef AMREX_USE_GPU
 __global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
     Real* AMREX_RESTRICT phi_new,
     const int* lo, const int* hi,
+    const GpuArray<Real,AMREX_SPACEDIM> dx,
     const Real dt)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x + lo[0];
@@ -244,55 +288,5 @@ __global__ void optimized_kernel(const Real* AMREX_RESTRICT phi_old,
 #endif
                     ); 
     }
-}
-
-#ifdef AMREX_USE_GPU
-void gpu_relaxation(){
-       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
-        {
-            const Box& bx = mfi.validbox();
-
-            const Array4<Real>& phiOld = phi_old[mfi].dataPtr();
-            const Array4<Real>& phiNew = phi_new[mfi].dataPtr();
-
-            const int* lo = box.loVect();
-            const int* hi = box.hiVect();
-            
-            int nx = hi[0] - lo[0] + 1;
-            int ny = hi[1] - lo[1] + 1;
-            int nz = hi[2] - lo[2] + 1;
-            
-            dim3 blockSize(8, 8, 8);
-            dim3 gridSize((nx + 7) / 8, (ny + 7) / 8, (nz + 7) / 8);
-
-            // launch gpu kernel
-            optimized_kernel<<<gridSize, blockSize>>>(
-                phiOld, phiNew, lo, hi, dt 
-            );
-        
-        }
-}
-
-#else
-void cpu_relaxation(){
-       for ( MFIter mfi(phi_old); mfi.isValid(); ++mfi )
-        {
-            const Box& bx = mfi.validbox();
-
-            const Array4<Real>& phiOld = phi_old.array(mfi);
-            const Array4<Real>& phiNew = phi_new.array(mfi);
-
-            // advance the data by dt
-            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k)
-            {
-                phiNew(i,j,k) = phiOld(i,j,k) + dt *
-                    ( (phiOld(i+1,j,k) - 2.*phiOld(i,j,k) + phiOld(i-1,j,k)) / (dx[0]*dx[0])
-                     +(phiOld(i,j+1,k) - 2.*phiOld(i,j,k) + phiOld(i,j-1,k)) / (dx[1]*dx[1])
-#if (AMREX_SPACEDIM == 3)
-                     +(phiOld(i,j,k+1) - 2.*phiOld(i,j,k) + phiOld(i,j,k-1)) / (dx[2]*dx[2])
-#endif
-                        );
-            });
-        }
 }
 #endif
